@@ -433,7 +433,22 @@ main:
           body:
             useLegacySql: false
             parameterMode: NAMED
-            query: ${"INSERT INTO `" + project_id + "." + dataset + ".staging_transactions` SELECT transaction_id, branch_id, product_id, quantity, price, transaction_date, currency, @source_file AS source_file, @partner_id AS partner_id, @entity AS entity, @batch_id AS batch_id, CURRENT_TIMESTAMP() AS ingest_timestamp FROM `" + project_id + "." + dataset + ".raw_transactions`"}
+            query: |
+              INSERT INTO `transactional-496815.event_pipeline.staging_transactions`
+              SELECT
+                transaction_id,
+                branch_id,
+                product_id,
+                quantity,
+                price,
+                transaction_date,
+                currency,
+                @source_file AS source_file,
+                @partner_id AS partner_id,
+                @entity AS entity,
+                @batch_id AS batch_id,
+                CURRENT_TIMESTAMP() AS ingest_timestamp
+              FROM `transactional-496815.event_pipeline.raw_transactions`
             queryParameters:
               - name: source_file
                 parameterType:
@@ -463,7 +478,45 @@ main:
           body:
             useLegacySql: false
             parameterMode: NAMED
-            query: ${"INSERT INTO `" + project_id + "." + dataset + ".rejected_transactions` SELECT transaction_id, branch_id, product_id, quantity, price, transaction_date, currency, source_file, partner_id, entity, batch_id, CONCAT(IF(transaction_id IS NULL OR transaction_id = '', 'transaction_id is null; ', ''), IF(branch_id IS NULL OR branch_id = '', 'branch_id is null; ', ''), IF(quantity IS NULL OR quantity <= 0, 'quantity must be > 0; ', ''), IF(price IS NULL OR price <= 0, 'price must be > 0; ', ''), IF(transaction_date IS NULL OR transaction_date > CURRENT_DATE(), 'transaction_date is invalid; ', ''), IF(currency IS NULL OR currency NOT IN ('VND','USD','EUR'), 'invalid currency; ', '')) AS reject_reason, CURRENT_TIMESTAMP() AS rejected_at FROM `" + project_id + "." + dataset + ".staging_transactions` WHERE batch_id = @batch_id AND (transaction_id IS NULL OR transaction_id = '' OR branch_id IS NULL OR branch_id = '' OR quantity IS NULL OR quantity <= 0 OR price IS NULL OR price <= 0 OR transaction_date IS NULL OR transaction_date > CURRENT_DATE() OR currency IS NULL OR currency NOT IN ('VND','USD','EUR'))"}
+            query: |
+              INSERT INTO `transactional-496815.event_pipeline.rejected_transactions`
+              SELECT
+                transaction_id,
+                branch_id,
+                product_id,
+                quantity,
+                price,
+                transaction_date,
+                currency,
+                source_file,
+                partner_id,
+                entity,
+                batch_id,
+                CONCAT(
+                  IF(transaction_id IS NULL OR transaction_id = '', 'transaction_id is null; ', ''),
+                  IF(branch_id IS NULL OR branch_id = '', 'branch_id is null; ', ''),
+                  IF(quantity IS NULL OR quantity <= 0, 'quantity must be > 0; ', ''),
+                  IF(price IS NULL OR price <= 0, 'price must be > 0; ', ''),
+                  IF(transaction_date IS NULL OR transaction_date > CURRENT_DATE(), 'transaction_date is invalid; ', ''),
+                  IF(currency IS NULL OR currency NOT IN ('VND','USD','EUR'), 'invalid currency; ', '')
+                ) AS reject_reason,
+                CURRENT_TIMESTAMP() AS rejected_at
+              FROM `transactional-496815.event_pipeline.staging_transactions`
+              WHERE batch_id = @batch_id
+                AND (
+                  transaction_id IS NULL
+                  OR transaction_id = ''
+                  OR branch_id IS NULL
+                  OR branch_id = ''
+                  OR quantity IS NULL
+                  OR quantity <= 0
+                  OR price IS NULL
+                  OR price <= 0
+                  OR transaction_date IS NULL
+                  OR transaction_date > CURRENT_DATE()
+                  OR currency IS NULL
+                  OR currency NOT IN ('VND','USD','EUR')
+                )
             queryParameters:
               - name: batch_id
                 parameterType:
@@ -478,7 +531,69 @@ main:
           body:
             useLegacySql: false
             parameterMode: NAMED
-            query: ${"MERGE `" + project_id + "." + dataset + ".curated_transactions` T USING (SELECT * FROM `" + project_id + "." + dataset + ".staging_transactions` WHERE batch_id = @batch_id AND transaction_id IS NOT NULL AND transaction_id != '' AND branch_id IS NOT NULL AND branch_id != '' AND quantity IS NOT NULL AND quantity > 0 AND price IS NOT NULL AND price > 0 AND transaction_date IS NOT NULL AND transaction_date <= CURRENT_DATE() AND currency IN ('VND','USD','EUR')) S ON T.partner_id = S.partner_id AND T.transaction_id = S.transaction_id WHEN MATCHED THEN UPDATE SET branch_id = S.branch_id, product_id = S.product_id, quantity = S.quantity, price = S.price, transaction_date = S.transaction_date, currency = S.currency, entity = S.entity, source_file = S.source_file, batch_id = S.batch_id, updated_at = CURRENT_TIMESTAMP() WHEN NOT MATCHED THEN INSERT (transaction_id, branch_id, product_id, quantity, price, transaction_date, currency, partner_id, entity, source_file, batch_id, created_at, updated_at) VALUES (S.transaction_id, S.branch_id, S.product_id, S.quantity, S.price, S.transaction_date, S.currency, S.partner_id, S.entity, S.source_file, S.batch_id, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
+            query: |
+              MERGE `transactional-496815.event_pipeline.curated_transactions` T
+              USING (
+                SELECT *
+                FROM `transactional-496815.event_pipeline.staging_transactions`
+                WHERE batch_id = @batch_id
+                  AND transaction_id IS NOT NULL
+                  AND transaction_id != ''
+                  AND branch_id IS NOT NULL
+                  AND branch_id != ''
+                  AND quantity IS NOT NULL
+                  AND quantity > 0
+                  AND price IS NOT NULL
+                  AND price > 0
+                  AND transaction_date IS NOT NULL
+                  AND transaction_date <= CURRENT_DATE()
+                  AND currency IN ('VND','USD','EUR')
+              ) S
+              ON T.partner_id = S.partner_id
+              AND T.transaction_id = S.transaction_id
+              WHEN MATCHED THEN
+                UPDATE SET
+                  branch_id = S.branch_id,
+                  product_id = S.product_id,
+                  quantity = S.quantity,
+                  price = S.price,
+                  transaction_date = S.transaction_date,
+                  currency = S.currency,
+                  entity = S.entity,
+                  source_file = S.source_file,
+                  batch_id = S.batch_id,
+                  updated_at = CURRENT_TIMESTAMP()
+              WHEN NOT MATCHED THEN
+                INSERT (
+                  transaction_id,
+                  branch_id,
+                  product_id,
+                  quantity,
+                  price,
+                  transaction_date,
+                  currency,
+                  partner_id,
+                  entity,
+                  source_file,
+                  batch_id,
+                  created_at,
+                  updated_at
+                )
+                VALUES (
+                  S.transaction_id,
+                  S.branch_id,
+                  S.product_id,
+                  S.quantity,
+                  S.price,
+                  S.transaction_date,
+                  S.currency,
+                  S.partner_id,
+                  S.entity,
+                  S.source_file,
+                  S.batch_id,
+                  CURRENT_TIMESTAMP(),
+                  CURRENT_TIMESTAMP()
+                )
             queryParameters:
               - name: batch_id
                 parameterType:

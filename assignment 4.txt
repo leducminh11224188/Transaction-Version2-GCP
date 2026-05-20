@@ -1,0 +1,215 @@
+Phase 1: Chuẩn bị project structure
+Phase 2: Setup GCP resources
+Phase 3: Tạo BigQuery tables
+Phase 4: Tạo test data CSV
+Phase 5: Code Cloud Run validator
+Phase 6: Deploy Cloud Run
+Phase 7: Code Workflow YAML
+Phase 8: Deploy Workflow
+Phase 9: Tạo Eventarc trigger
+Phase 10: Test end-to-end
+Phase 11: Chụp kết quả / viết report
+
+assignment-04/
+│
+├── setup.sh
+├── ddl.sql
+├── workflow.yaml
+│
+├── cloud_run_validator/
+│   ├── main.py
+│   ├── requirements.txt
+│   └── Dockerfile
+│
+└── test_files/
+    ├── valid.csv
+    ├── invalid_schema.csv
+    ├── invalid_rows.csv
+    └── duplicate.csv
+
+export PROJECT_ID=transactional-496815
+export REGION=asia-southeast1
+export DATASET=event_pipeline
+export LANDING_BUCKET=$PROJECT_ID-landing
+export DLQ_TOPIC=transaction-dlq
+export WORKFLOW_NAME=transaction-ingestion-workflow
+export VALIDATOR_SERVICE=transaction-validator
+export WORKFLOW_SA=workflow-sa
+export VALIDATOR_SA=validator-sa
+
+gcloud config set project $PROJECT_ID
+
+Phase 3: Enable APIs
+
+Chạy:
+
+gcloud services enable \
+  storage.googleapis.com \
+  eventarc.googleapis.com \
+  workflows.googleapis.com \
+  run.googleapis.com \
+  bigquery.googleapis.com \
+  pubsub.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  iam.googleapis.com
+
+Phase 4: Tạo GCS bucket
+gsutil mb -l $REGION gs://$LANDING_BUCKET
+
+Phase 5: Tạo Pub/Sub DLQ topic
+gcloud pubsub topics create $DLQ_TOPIC
+
+Phase 6: Tạo service accounts
+
+Tạo service account cho Workflow:
+gcloud iam service-accounts create $WORKFLOW_SA \
+  --display-name="Workflow Service Account"
+
+Tạo service account cho Cloud Run Validator:
+gcloud iam service-accounts create $VALIDATOR_SA \
+  --display-name="Validator Service Account"
+
+Phase 7: Gán IAM roles
+Workflow service account
+
+Workflow cần gọi Cloud Run, chạy BigQuery job, publish Pub/Sub.
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$WORKFLOW_SA@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/bigquery.jobUser"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$WORKFLOW_SA@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/bigquery.dataEditor"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$WORKFLOW_SA@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/pubsub.publisher"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$WORKFLOW_SA@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/run.invoker"
+Validator service account
+
+Cloud Run validator cần đọc file từ GCS:
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$VALIDATOR_SA@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/storage.objectViewer"
+Phase 8: Tạo BigQuery dataset
+bq --location=$REGION mk --dataset $PROJECT_ID:$DATASET
+Phase 9: Tạo BigQuery tables
+
+Tạo file ddl.sql
+
+Phase 10: Gen test data CSV
+
+Phase 11: Code Cloud Run Validator
+
+Phase 12: Deploy Cloud Run Validator
+
+Linux/Bash
+gcloud run deploy $VALIDATOR_SERVICE \
+  --source ./cloud_run_validator \
+  --region $REGION \
+  --service-account $VALIDATOR_SA@$PROJECT_ID.iam.gserviceaccount.com \
+  --no-allow-unauthenticated
+
+Powershell
+gcloud run deploy transaction-validator `
+  --source ./cloud_run_validator `
+  --region asia-southeast1 `
+  --service-account validator-sa@transactional-496815.iam.gserviceaccount.com `
+  --no-allow-unauthenticated
+
+deploy đang lỗi do thiếu quyền đọc object trong Cloud Storage. Khi deploy Cloud Run bằng --source, 
+source code sẽ được upload lên một bucket tạm của Google Cloud, rồi service account build cần đọc source đó để build container. Nó đang không đọc được.
+
+gcloud projects add-iam-policy-binding transactional-496815 \
+  --member="serviceAccount:340954912438-compute@developer.gserviceaccount.com" \
+  --role="roles/storage.objectViewer"
+
+Lấy URL:
+
+export VALIDATOR_URL=$(gcloud run services describe $VALIDATOR_SERVICE \
+  --region=$REGION \
+  --format="value(status.url)")
+
+echo $VALIDATOR_URL
+
+$VALIDATOR_URL = gcloud run services describe transaction-validator `
+  --region=asia-southeast1 `
+  --format="value(status.url)"
+
+echo $VALIDATOR_URL
+
+Phase 13: Test Cloud Run Validator riêng
+
+Upload file test trước:
+
+gsutil cp /home/leducminh583/Transaction-Version2-GCP/test_files/valid.csv gs://$LANDING_BUCKET/incoming/PARTNER_A/sales/transactions_20250501.csv
+
+Gọi Cloud Run bằng identity token:
+
+Linux/Bash
+curl -X POST "https://transaction-validator-340954912438.asia-southeast1.run.app/validate" \
+-H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+-H "Content-Type: application/json" \
+-d '{ "bucket": "transactional-496815-landing", "name": "incoming/PARTNER_A/sales/transactions_20250501.csv" }'
+
+Phase 13 có thể test bằng Postman
+
+Phase 14: Viết workflow.yaml
+
+Phase 15: Deploy workflow
+
+Linux/Bash
+gcloud workflows deploy $WORKFLOW_NAME \
+  --source=/home/leducminh583/Transaction-Version2-GCP/workflow.yaml \
+  --location=$REGION \
+  --service-account=$WORKFLOW_SA@$PROJECT_ID.iam.gserviceaccount.com
+
+Powershell
+$PROJECT_ID = "transactional-496815"
+$REGION = "asia-southeast1"
+$WORKFLOW_NAME = "transaction-ingestion-workflow"
+$WORKFLOW_SA = "workflow-sa"
+
+gcloud workflows deploy $WORKFLOW_NAME `
+  --source=workflow.yaml `
+  --location=$REGION `
+  --service-account="$WORKFLOW_SA@$PROJECT_ID.iam.gserviceaccount.com"
+
+Phase 16: Tạo eventarc trigger
+gcloud eventarc triggers create gcs-finalized-trigger \
+  --location=$REGION \
+  --destination-workflow=$WORKFLOW_NAME \
+  --destination-workflow-location=$REGION \
+  --event-filters="type=google.cloud.storage.object.v1.finalized" \
+  --event-filters="bucket=$LANDING_BUCKET" \
+  --service-account=$WORKFLOW_SA@$PROJECT_ID.iam.gserviceaccount.com
+
+$PROJECT_ID = "transactional-496815"
+$REGION = "asia-southeast1"
+$WORKFLOW_NAME = "transaction-ingestion-workflow"
+$WORKFLOW_SA = "workflow-sa"
+$LANDING_BUCKET = "transactional-496815-landing"
+
+gcloud eventarc triggers create gcs-finalized-trigger `
+  --location=$REGION `
+  --destination-workflow=$WORKFLOW_NAME `
+  --destination-workflow-location=$REGION `
+  --event-filters="type=google.cloud.storage.object.v1.finalized" `
+  --event-filters="bucket=$LANDING_BUCKET" `
+  --service-account=$WORKFLOW_SA@$PROJECT_ID.iam.gserviceaccount.com
+
+Phase 17: Test end-to-end
+gsutil cp test_files/valid.csv gs://$LANDING_BUCKET/incoming/PARTNER_A/sales/transactions_20250510.csv
+gsutil cp test_files/valid.csv gs://$LANDING_BUCKET/incom/PARTNER_A/sales/transactions_20250501.csv
+
+gsutil cp test_files/invalid_schema_missing_currency.csv gs://$LANDING_BUCKET/incoming/PARTNER_A/sales/transactions_20250503.csv
+
+
+	
+Test BigQuery
