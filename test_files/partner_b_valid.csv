@@ -1,0 +1,4 @@
+transaction_id,branch_id,product_id,quantity,price,transaction_date,currency
+PB001,B101,P101,4,50000,2025-05-05,VND
+PB002,B102,P102,2,18,2025-05-06,USD
+PB003,B103,P103,1,12,2025-05-07,EUR
