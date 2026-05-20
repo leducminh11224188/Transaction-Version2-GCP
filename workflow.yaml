@@ -155,7 +155,7 @@ main:
                       parameterType:
                         type: STRING
                       parameterValue:
-                        value: ${json.encode(validation.errors)}
+                        value: ${json.encode_to_string(validation.errors)}
           - return_validation_retryable:
               return: "Validation retryable failure"
 
@@ -199,7 +199,7 @@ main:
                       parameterType:
                         type: STRING
                       parameterValue:
-                        value: ${json.encode(validation.errors)}
+                        value: ${json.encode_to_string(validation.errors)}
           - return_validation_failed:
               return: "Validation failed"
 
