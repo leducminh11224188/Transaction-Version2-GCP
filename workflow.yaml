@@ -11,7 +11,6 @@ main:
           - object_name: ${event.data.name}
           - batch_id: ${uuid.generate()}
           - source_uri: ${"gs://" + bucket + "/" + object_name}
-          - started_at: ${time.format(sys.now())}
 
     - call_validator:
         try:
@@ -29,15 +28,14 @@ main:
         except:
           as: e
           steps:
-
-          
             - build_validator_failure_message:
                 assign:
+                  - validator_error_text: "Cloud Run validator call failed"
                   - dlq_message:
                       batch_id: ${batch_id}
                       bucket: ${bucket}
                       source_file: ${object_name}
-                      error: "Cloud Run validator call failed"
+                      error: ${validator_error_text}
                       retryable: true
 
             - publish_validator_failure:
@@ -46,7 +44,38 @@ main:
                   topic: ${"projects/" + project_id + "/topics/" + dlq_topic}
                   body:
                     messages:
-                      - data: ${base64.encode(text.encode(json.encode(dlq_message)))}
+                      - data: ${base64.encode(text.encode(json.encode_to_string(dlq_message)))}
+
+            - audit_validator_failure:
+                call: googleapis.bigquery.v2.jobs.query
+                args:
+                  projectId: ${project_id}
+                  body:
+                    useLegacySql: false
+                    parameterMode: NAMED
+                    query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, NULL, NULL, 'FAILED_RETRYABLE', true, @error_message, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
+                    queryParameters:
+                      - name: batch_id
+                        parameterType:
+                          type: STRING
+                        parameterValue:
+                          value: ${batch_id}
+                      - name: source_file
+                        parameterType:
+                          type: STRING
+                        parameterValue:
+                          value: ${object_name}
+                      - name: bucket
+                        parameterType:
+                          type: STRING
+                        parameterValue:
+                          value: ${bucket}
+                      - name: error_message
+                        parameterType:
+                          type: STRING
+                        parameterValue:
+                          value: ${validator_error_text}
+
             - return_validator_failure:
                 return: "Validator call failed and message published to DLQ"
 
@@ -63,8 +92,8 @@ main:
           projectId: ${project_id}
           body:
             useLegacySql: false
-            query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'STARTED', false, NULL, CURRENT_TIMESTAMP(), NULL, CURRENT_TIMESTAMP())"}
             parameterMode: NAMED
+            query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'STARTED', false, NULL, CURRENT_TIMESTAMP(), NULL, CURRENT_TIMESTAMP())"}
             queryParameters:
               - name: batch_id
                 parameterType:
@@ -117,15 +146,16 @@ main:
                 topic: ${"projects/" + project_id + "/topics/" + dlq_topic}
                 body:
                   messages:
-                    - data: ${base64.encode(text.encode(json.encode(dlq_message)))}
+                    - data: ${base64.encode(text.encode(json.encode_to_string(dlq_message)))}
+
           - audit_validation_retryable:
               call: googleapis.bigquery.v2.jobs.query
               args:
                 projectId: ${project_id}
                 body:
                   useLegacySql: false
-                  query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'FAILED_RETRYABLE', true, @error_message, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
                   parameterMode: NAMED
+                  query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'FAILED_RETRYABLE', true, @error_message, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
                   queryParameters:
                     - name: batch_id
                       parameterType:
@@ -157,6 +187,7 @@ main:
                         type: STRING
                       parameterValue:
                         value: ${validation_errors_text}
+
           - return_validation_retryable:
               return: "Validation retryable failure"
 
@@ -168,8 +199,8 @@ main:
                 projectId: ${project_id}
                 body:
                   useLegacySql: false
-                  query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'VALIDATION_FAILED', false, @error_message, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
                   parameterMode: NAMED
+                  query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'VALIDATION_FAILED', false, @error_message, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
                   queryParameters:
                     - name: batch_id
                       parameterType:
@@ -201,6 +232,7 @@ main:
                         type: STRING
                       parameterValue:
                         value: ${validation_errors_text}
+
           - return_validation_failed:
               return: "Validation failed"
 
@@ -210,8 +242,8 @@ main:
           projectId: ${project_id}
           body:
             useLegacySql: false
-            query: ${"SELECT COUNT(*) AS cnt FROM `" + project_id + "." + dataset + ".audit_log` WHERE source_file = @source_file AND status = 'COMPLETED'"}
             parameterMode: NAMED
+            query: ${"SELECT COUNT(*) AS cnt FROM `" + project_id + "." + dataset + ".audit_log` WHERE source_file = @source_file AND status = 'COMPLETED'"}
             queryParameters:
               - name: source_file
                 parameterType:
@@ -238,8 +270,8 @@ main:
                 projectId: ${project_id}
                 body:
                   useLegacySql: false
-                  query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'DUPLICATE_SKIPPED', false, 'File already completed', NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
                   parameterMode: NAMED
+                  query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'DUPLICATE_SKIPPED', false, 'File already completed', NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
                   queryParameters:
                     - name: batch_id
                       parameterType:
@@ -266,6 +298,7 @@ main:
                         type: STRING
                       parameterValue:
                         value: ${entity}
+
           - return_duplicate:
               return: "Duplicate file skipped"
 
@@ -304,29 +337,103 @@ main:
                       type: STRING
         result: load_result
 
+    - get_load_job:
+        call: googleapis.bigquery.v2.jobs.get
+        args:
+          projectId: ${project_id}
+          jobId: ${load_result.jobReference.jobId}
+          location: ${load_result.jobReference.location}
+        result: load_job
+
+    - check_load_done:
+        switch:
+          - condition: ${load_job.status.state == "DONE"}
+            next: check_load_error
+        next: wait_for_load
+
+    - wait_for_load:
+        call: sys.sleep
+        args:
+          seconds: 2
+        next: get_load_job
+
+    - check_load_error:
+        switch:
+          - condition: ${map.get(load_job.status, "errorResult") != null}
+            next: load_failed
+        next: insert_to_staging
+
+    - load_failed:
+        steps:
+          - assign_load_error:
+              assign:
+                - load_error_text: ${json.encode_to_string(load_job.status.errorResult)}
+                - dlq_message:
+                    batch_id: ${batch_id}
+                    bucket: ${bucket}
+                    source_file: ${object_name}
+                    error: ${load_error_text}
+                    retryable: true
+
+          - publish_load_failure:
+              call: googleapis.pubsub.v1.projects.topics.publish
+              args:
+                topic: ${"projects/" + project_id + "/topics/" + dlq_topic}
+                body:
+                  messages:
+                    - data: ${base64.encode(text.encode(json.encode_to_string(dlq_message)))}
+
+          - audit_load_failure:
+              call: googleapis.bigquery.v2.jobs.query
+              args:
+                projectId: ${project_id}
+                body:
+                  useLegacySql: false
+                  parameterMode: NAMED
+                  query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'FAILED_RETRYABLE', true, @error_message, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
+                  queryParameters:
+                    - name: batch_id
+                      parameterType:
+                        type: STRING
+                      parameterValue:
+                        value: ${batch_id}
+                    - name: source_file
+                      parameterType:
+                        type: STRING
+                      parameterValue:
+                        value: ${object_name}
+                    - name: bucket
+                      parameterType:
+                        type: STRING
+                      parameterValue:
+                        value: ${bucket}
+                    - name: partner_id
+                      parameterType:
+                        type: STRING
+                      parameterValue:
+                        value: ${partner_id}
+                    - name: entity
+                      parameterType:
+                        type: STRING
+                      parameterValue:
+                        value: ${entity}
+                    - name: error_message
+                      parameterType:
+                        type: STRING
+                      parameterValue:
+                        value: ${load_error_text}
+
+          - return_load_failure:
+              return: "BigQuery load failed and message published to DLQ"
+
     - insert_to_staging:
         call: googleapis.bigquery.v2.jobs.query
         args:
           projectId: ${project_id}
           body:
             useLegacySql: false
-            query: |
-              INSERT INTO `transactional-496815.event_pipeline.staging_transactions`
-              SELECT
-                transaction_id,
-                branch_id,
-                product_id,
-                quantity,
-                price,
-                transaction_date,
-                currency,
-                @source_file AS source_file,
-                @partner_id AS partner_id,
-                @entity AS entity,
-                @batch_id AS batch_id,
-                CURRENT_TIMESTAMP() AS ingest_timestamp
-              FROM `transactional-496815.event_pipeline.raw_transactions`
             parameterMode: NAMED
+            query: ${"INSERT INTO `" + project_id + "." + dataset + ".staging_transactions` SELECT transaction_id, branch_id, product_id, quantity, price, transaction_date, currency, @source_file AS source_file, @partner_id AS partner_id, @entity AS entity, @batch_id AS batch_id, CURRENT_TIMESTAMP() AS ingest_timestamp FROM `" + project_id + "." + dataset + ".raw_transactions`"}
             queryParameters:
               - name: source_file
                 parameterType:
@@ -355,42 +462,8 @@ main:
           projectId: ${project_id}
           body:
             useLegacySql: false
-            query: |
-              INSERT INTO `transactional-496815.event_pipeline.rejected_transactions`
-              SELECT
-                transaction_id,
-                branch_id,
-                product_id,
-                quantity,
-                price,
-                transaction_date,
-                currency,
-                source_file,
-                partner_id,
-                entity,
-                batch_id,
-                CONCAT(
-                  IF(transaction_id IS NULL OR transaction_id = '', 'transaction_id is null; ', ''),
-                  IF(branch_id IS NULL OR branch_id = '', 'branch_id is null; ', ''),
-                  IF(quantity <= 0, 'quantity must be > 0; ', ''),
-                  IF(price <= 0, 'price must be > 0; ', ''),
-                  IF(transaction_date > CURRENT_DATE(), 'transaction_date is future date; ', ''),
-                  IF(currency NOT IN ('VND','USD','EUR'), 'invalid currency; ', '')
-                ) AS reject_reason,
-                CURRENT_TIMESTAMP() AS rejected_at
-              FROM `transactional-496815.event_pipeline.staging_transactions`
-              WHERE batch_id = @batch_id
-                AND (
-                  transaction_id IS NULL
-                  OR transaction_id = ''
-                  OR branch_id IS NULL
-                  OR branch_id = ''
-                  OR quantity <= 0
-                  OR price <= 0
-                  OR transaction_date > CURRENT_DATE()
-                  OR currency NOT IN ('VND','USD','EUR')
-                )
             parameterMode: NAMED
+            query: ${"INSERT INTO `" + project_id + "." + dataset + ".rejected_transactions` SELECT transaction_id, branch_id, product_id, quantity, price, transaction_date, currency, source_file, partner_id, entity, batch_id, CONCAT(IF(transaction_id IS NULL OR transaction_id = '', 'transaction_id is null; ', ''), IF(branch_id IS NULL OR branch_id = '', 'branch_id is null; ', ''), IF(quantity IS NULL OR quantity <= 0, 'quantity must be > 0; ', ''), IF(price IS NULL OR price <= 0, 'price must be > 0; ', ''), IF(transaction_date IS NULL OR transaction_date > CURRENT_DATE(), 'transaction_date is invalid; ', ''), IF(currency IS NULL OR currency NOT IN ('VND','USD','EUR'), 'invalid currency; ', '')) AS reject_reason, CURRENT_TIMESTAMP() AS rejected_at FROM `" + project_id + "." + dataset + ".staging_transactions` WHERE batch_id = @batch_id AND (transaction_id IS NULL OR transaction_id = '' OR branch_id IS NULL OR branch_id = '' OR quantity IS NULL OR quantity <= 0 OR price IS NULL OR price <= 0 OR transaction_date IS NULL OR transaction_date > CURRENT_DATE() OR currency IS NULL OR currency NOT IN ('VND','USD','EUR'))"}
             queryParameters:
               - name: batch_id
                 parameterType:
@@ -404,67 +477,8 @@ main:
           projectId: ${project_id}
           body:
             useLegacySql: false
-            query: |
-              MERGE `transactional-496815.event_pipeline.curated_transactions` T
-              USING (
-                SELECT *
-                FROM `transactional-496815.event_pipeline.staging_transactions`
-                WHERE batch_id = @batch_id
-                  AND transaction_id IS NOT NULL
-                  AND transaction_id != ''
-                  AND branch_id IS NOT NULL
-                  AND branch_id != ''
-                  AND quantity > 0
-                  AND price > 0
-                  AND transaction_date <= CURRENT_DATE()
-                  AND currency IN ('VND','USD','EUR')
-              ) S
-              ON T.partner_id = S.partner_id
-              AND T.transaction_id = S.transaction_id
-              WHEN MATCHED THEN
-                UPDATE SET
-                  branch_id = S.branch_id,
-                  product_id = S.product_id,
-                  quantity = S.quantity,
-                  price = S.price,
-                  transaction_date = S.transaction_date,
-                  currency = S.currency,
-                  entity = S.entity,
-                  source_file = S.source_file,
-                  batch_id = S.batch_id,
-                  updated_at = CURRENT_TIMESTAMP()
-              WHEN NOT MATCHED THEN
-                INSERT (
-                  transaction_id,
-                  branch_id,
-                  product_id,
-                  quantity,
-                  price,
-                  transaction_date,
-                  currency,
-                  partner_id,
-                  entity,
-                  source_file,
-                  batch_id,
-                  created_at,
-                  updated_at
-                )
-                VALUES (
-                  S.transaction_id,
-                  S.branch_id,
-                  S.product_id,
-                  S.quantity,
-                  S.price,
-                  S.transaction_date,
-                  S.currency,
-                  S.partner_id,
-                  S.entity,
-                  S.source_file,
-                  S.batch_id,
-                  CURRENT_TIMESTAMP(),
-                  CURRENT_TIMESTAMP()
-                )
             parameterMode: NAMED
+            query: ${"MERGE `" + project_id + "." + dataset + ".curated_transactions` T USING (SELECT * FROM `" + project_id + "." + dataset + ".staging_transactions` WHERE batch_id = @batch_id AND transaction_id IS NOT NULL AND transaction_id != '' AND branch_id IS NOT NULL AND branch_id != '' AND quantity IS NOT NULL AND quantity > 0 AND price IS NOT NULL AND price > 0 AND transaction_date IS NOT NULL AND transaction_date <= CURRENT_DATE() AND currency IN ('VND','USD','EUR')) S ON T.partner_id = S.partner_id AND T.transaction_id = S.transaction_id WHEN MATCHED THEN UPDATE SET branch_id = S.branch_id, product_id = S.product_id, quantity = S.quantity, price = S.price, transaction_date = S.transaction_date, currency = S.currency, entity = S.entity, source_file = S.source_file, batch_id = S.batch_id, updated_at = CURRENT_TIMESTAMP() WHEN NOT MATCHED THEN INSERT (transaction_id, branch_id, product_id, quantity, price, transaction_date, currency, partner_id, entity, source_file, batch_id, created_at, updated_at) VALUES (S.transaction_id, S.branch_id, S.product_id, S.quantity, S.price, S.transaction_date, S.currency, S.partner_id, S.entity, S.source_file, S.batch_id, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
             queryParameters:
               - name: batch_id
                 parameterType:
@@ -478,8 +492,8 @@ main:
           projectId: ${project_id}
           body:
             useLegacySql: false
-            query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'COMPLETED', false, NULL, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
             parameterMode: NAMED
+            query: ${"INSERT INTO `" + project_id + "." + dataset + ".audit_log` (batch_id, source_file, bucket, partner_id, entity, status, is_retryable, error_message, started_at, finished_at, created_at) VALUES (@batch_id, @source_file, @bucket, @partner_id, @entity, 'COMPLETED', false, NULL, NULL, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())"}
             queryParameters:
               - name: batch_id
                 parameterType:
