@@ -1,3 +1,0 @@
-transaction_id,branch_id,product_id,qty,price,transaction_date,currency
-T301,B001,P001,2,100000,2025-05-01,VND
-T302,B002,P002,1,20,2025-05-01,USD

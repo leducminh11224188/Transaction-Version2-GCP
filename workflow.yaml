@@ -55,6 +55,7 @@ main:
           - validation: ${validation_response.body}
           - partner_id: ${validation.partner_id}
           - entity: ${validation.entity}
+          - validation_errors_text: ${json.encode_to_string(validation.errors)}
 
     - insert_audit_started:
         call: googleapis.bigquery.v2.jobs.query
@@ -155,7 +156,7 @@ main:
                       parameterType:
                         type: STRING
                       parameterValue:
-                        value: ${json.encode_to_string(validation.errors)}
+                        value: ${validation_errors_text}
           - return_validation_retryable:
               return: "Validation retryable failure"
 
@@ -199,7 +200,7 @@ main:
                       parameterType:
                         type: STRING
                       parameterValue:
-                        value: ${json.encode_to_string(validation.errors)}
+                        value: ${validation_errors_text}
           - return_validation_failed:
               return: "Validation failed"
 
@@ -284,7 +285,7 @@ main:
                 sourceFormat: "CSV"
                 skipLeadingRows: 1
                 allowJaggedRows: true
-                writeDisposition: "WRITE_APPEND"
+                writeDisposition: "WRITE_TRUNCATE"
                 schema:
                   fields:
                     - name: transaction_id
